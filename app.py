@@ -7,11 +7,16 @@ import pandas as pd
 import io, zipfile, os
 from datetime import datetime, date
 
-# ---------- MYSQL USER AUTHENTICATION ----------
+# ---------------------------------------------------------
+# MYSQL USER AUTHENTICATION AND SESSION MANAGEMENT
+# ---------------------------------------------------------
 
+# Hash a password using SHA-256 for secure storage
 def hash_password(password):
     return hashlib.sha256(password.encode()).hexdigest()
 
+
+# Register a new user account and insert into MySQL database
 def register_user(username, email, password):
     conn = st.connection("mysql", type="sql")
     password_hash = hash_password(password)
@@ -26,6 +31,8 @@ def register_user(username, email, password):
     except Exception as e:
         st.error(f"Registration failed: {e}")
 
+
+# Validate user credentials against stored username and hashed password
 def login_user(username, password):
     conn = st.connection("mysql", type="sql")
     password_hash = hash_password(password)
@@ -36,6 +43,8 @@ def login_user(username, password):
     )
     return len(result) > 0
 
+
+# Fetch logged-in user’s ID from database using username
 def get_user_id(username):
     conn = st.connection("mysql", type="sql")
     result = conn.query("SELECT id FROM users WHERE username = :username", params={"username": username})
@@ -44,8 +53,12 @@ def get_user_id(username):
     else:
         return None
 
-# ---------- STATIC ASSET PATHS ----------
 
+# ---------------------------------------------------------
+# STATIC ASSET PATHS FOR ORGANIZATIONS AND SEALS
+# ---------------------------------------------------------
+
+# Store logo, seal, and signature paths for each organization
 ORG_ASSETS = {
     "DLithe": {
         "logo": "dlithe_logo.png",
@@ -59,7 +72,10 @@ ORG_ASSETS = {
     }
 }
 
-# ---------- DOMAIN SHORTFORMS ----------
+
+# ---------------------------------------------------------
+# DOMAIN SHORTFORMS (USED IN CERTIFICATE IDs)
+# ---------------------------------------------------------
 
 DOMAIN_SHORTFORMS = {
     "Python Fullstack": "PY",
@@ -67,11 +83,15 @@ DOMAIN_SHORTFORMS = {
     "Cybersecurity": "CS",
     "Java Full Stack": "JFSD",
     "Artificial Intelligence": "AIML",
-    "Internet of Things":"IOT"
+    "Internet of Things": "IOT"
 }
 
-# ---------- FLEXIBLE COLUMN MAPPING AND DATE FIX ----------
 
+# ---------------------------------------------------------
+# COLUMN MAPPING AND DATE PARSING UTILITIES
+# ---------------------------------------------------------
+
+# Maps variable column headers to a consistent format
 EXPECTED_COLUMNS = {
     "Prefix":["Prefix","prefix"],
     "Name": ["Name", "Full Name", "Student Name"],
@@ -92,6 +112,8 @@ EXPECTED_COLUMNS = {
     "Domain": ["Domain", "Internship Domain", "Course Domain"]
 }
 
+
+# Safely parse and normalize date values from CSV
 def parse_date_safe(val):
     if val is None or (isinstance(val, float) and pd.isna(val)) or str(val).strip() == "":
         return None
@@ -103,6 +125,8 @@ def parse_date_safe(val):
     except Exception:
         return None
 
+
+# Map uploaded CSV columns to standardized column names and clean data
 def map_and_clean_columns(df):
     mapped_df = pd.DataFrame()
     for standard_col, aliases in EXPECTED_COLUMNS.items():
@@ -111,10 +135,9 @@ def map_and_clean_columns(df):
             if alias in df.columns:
                 found = alias
                 break
-        if found:
-            mapped_df[standard_col] = df[found]
-        else:
-            mapped_df[standard_col] = None
+        mapped_df[standard_col] = df[found] if found else None
+
+    # Clean string values and ensure dates are formatted
     mapped_df = mapped_df.where(pd.notnull(mapped_df), None)
     for col in mapped_df.columns:
         mapped_df[col] = mapped_df[col].apply(lambda x: str(x).strip() if isinstance(x, str) else x)
@@ -123,14 +146,22 @@ def map_and_clean_columns(df):
             mapped_df[date_col] = mapped_df[date_col].apply(parse_date_safe)
     return mapped_df
 
+
+# ---------------------------------------------------------
+# CERTIFICATE ID GENERATION AND TEXT UTILITIES
+# ---------------------------------------------------------
+
+# Generate certificate ID based on organization, domain, student, and date
 def generate_certificate_id(domain_short, usn, date_obj, org):
-    month_short = date_obj.strftime("%b").upper()  # e.g., 'Jun' → 'JUN'
-    year_short = date_obj.strftime("%y")           # e.g., 2025 → '25'
+    month_short = date_obj.strftime("%b").upper()
+    year_short = date_obj.strftime("%y")
     if str(org).lower() == "nxtalign":
         return f"NXT{domain_short}{usn}{month_short}{year_short}"
     else:
         return f"DL{domain_short}{usn}{month_short}{year_short}"
 
+
+# Clean text to replace special typographic characters
 def clean_text(text):
     if not isinstance(text, str):
         return ""
@@ -141,6 +172,8 @@ def clean_text(text):
             .replace("”", '"')
     )
 
+
+# Format date values into human-readable form
 def format_date(dt):
     if isinstance(dt, str):
         try:
@@ -149,178 +182,146 @@ def format_date(dt):
             return dt
     if isinstance(dt, date) and not isinstance(dt, datetime):
         dt = datetime(dt.year, dt.month, dt.day)
+
     day = dt.day
-    if 4 <= day % 100 <= 20:
-        suffix = "th"
-    else:
-        suffix = {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    suffix = "th" if 4 <= day % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
     return f"{day}{suffix} {dt:%B %Y}"
+
+
+# ---------------------------------------------------------
+# PDF CERTIFICATE GENERATION USING FPDF
+# ---------------------------------------------------------
 
 def generate_certificate_pdf(
     prefix, name, usn, college, start_date_str, end_date_str, topic, cert_id,
     org, logo_path=None, signature_path=None, seal_path=None, cert_type=None,
     activity_type="Internship", duration="15 Weeks"
 ):
+    # Initialize PDF document
     pdf = FPDF(unit='mm', format='A4')
     pdf.set_auto_page_break(False)
     pdf.add_page()
-    page_width = pdf.w
-    page_height = pdf.h
 
+    page_width, page_height = pdf.w, pdf.h
     border_margin = 8
-    border_width = page_width - 2 * border_margin
-    border_height = page_height - 2 * border_margin
+
+    # Add border
     pdf.set_line_width(0.5)
     pdf.set_draw_color(255,255,255)
-    pdf.rect(border_margin, border_margin, border_width, border_height)
+    pdf.rect(border_margin, border_margin, page_width - 2*border_margin, page_height - 2*border_margin)
 
+    # Margins
     left_margin = border_margin + 8
     right_margin = border_margin + 8
     top_margin = border_margin + 8
-    bottom_margin = border_margin + 8
     pdf.set_left_margin(left_margin)
     pdf.set_right_margin(right_margin)
-
     current_y = top_margin
 
-    # Logo
+    # Add logo if found
     if logo_path and os.path.exists(logo_path):
         try:
-            logo_width = 35.0
-            logo_x = left_margin
-            logo_y = current_y
-            pdf.image(logo_path, x=logo_x, y=logo_y, w=logo_width)
+            pdf.image(logo_path, x=left_margin, y=current_y, w=35.0)
         except Exception as e:
             st.error(f"Error loading logo image: {e}")
 
-    # Organization header
+    # Organization-specific information text
     if org == "DLithe":
         org_name = "DLithe Consultancy Services Pvt. Ltd."
         org_cin = "CIN: U72900KA2019PTC121035"
-        org_footer1 = "           Registered office: #51, 1st Main, 6th Block, 3rd Phase, BSK 3rd Stage, Bangaluru -560085"
-        org_footer2 = "Development Centeres: Ujire | Moodabidre | Manipal | Mangaluru | Belagavi"
+        org_footer1 = "Registered office: #51, 1st Main, 6th Block, BSK 3rd Stage, Bengaluru -560085"
+        org_footer2 = "Development Centers: Ujire | Moodabidre | Manipal | Mangaluru | Belagavi"
         org_footer3 = "M: 9008815252 | www.dlithe.com | info@dlithe.com"
         for_text = "For DLithe Consultancy Services Pvt. Ltd."
     else:
-        org_name = "nxtAlign Innovation Pvt.Ltd."
+        org_name = "nxtAlign Innovation Pvt. Ltd."
         org_cin = "CIN: U73100KA2022PTC165879"
-        org_footer1 = "           Registered office: H No.4061/B 01,Near Chidambar Ashram Health Camp Betageri,Gadag KA 582102"
-        org_footer2 = "Development Centeres: Ujire | AIC NITTE"
+        org_footer1 = "Registered office: H No.4061/B 01, Near Chidambar Ashram, Gadag KA 582102"
+        org_footer2 = "Development Centers: Ujire | AIC NITTE"
         org_footer3 = "M: 8553300781 | www.nxtalign.com | nxtalign@gmail.com"
-        for_text = "For nxtAlign Innovation Pvt.Ltd."
+        for_text = "For nxtAlign Innovation Pvt. Ltd."
 
+    # Header section with organization info
     pdf.set_xy(left_margin + 40, current_y)
     pdf.set_font("Arial", "B", 14)
     pdf.cell(page_width - left_margin - right_margin - 40, 8, org_name, align='R', ln=1)
     pdf.set_font("Arial", "", 12)
-    pdf.set_x(left_margin + 40)
     pdf.cell(page_width - left_margin - right_margin - 40, 6, org_cin, align='R', ln=1)
     current_y += 18
-    pdf.set_y(current_y)
-    pdf.ln(8)
-    pdf.set_font("Arial", "", 12)
-    pdf.set_x(left_margin)
+
+    # Certificate ID and issue date
+    pdf.set_y(current_y + 8)
     pdf.cell(0, 5, f"Certificate ID: {cert_id}", align='L')
-    issued_on_text = f"Issued on: {end_date_str}"
-    text_width = pdf.get_string_width(issued_on_text)
-    desired_x_position = page_width - right_margin - text_width
-    pdf.set_xy(desired_x_position, pdf.get_y())
-    pdf.cell(text_width, 5, issued_on_text, align='L')
+    issued_text = f"Issued on: {end_date_str}"
+    pdf.set_x(page_width - right_margin - pdf.get_string_width(issued_text))
+    pdf.cell(pdf.get_string_width(issued_text), 5, issued_text, align='L')
     pdf.ln(15)
 
-    # --- PROVISIONAL exactly above TO WHOMSOEVER ---
+    # Add PROVISIONAL text if applicable
     if cert_type and cert_type.lower() == "provisional":
         pdf.set_font("Arial", "B", 12)
         pdf.cell(0, 10, "PROVISIONAL CERTIFICATE", align='C', ln=1)
-        pdf.ln(2)  # Small gap
+        pdf.ln(2)
 
-    # Main Heading
+    # Main certificate heading
     pdf.set_font("Arial", "B", 14)
     pdf.cell(0, 10, "TO WHOMSOEVER IT MAY CONCERN", align='C', ln=1)
-    pdf.ln(10)
 
-    # Certificate Body (dynamic)
+    # Certificate body text
     pdf.set_font("Arial", "", 12)
     effective_width = page_width - left_margin - right_margin
     pdf.set_x(left_margin)
 
+    # Body text for each certificate type
     if cert_type and cert_type.lower() == "provisional":
-        para1 = (
-            f"This is to certify {prefix}. {name}, bearing USN No: {usn} from {college}, "
+        para = (
+            f"This is to certify {prefix}. {name}, from {college}, "
             f"is currently undergoing a {duration} {activity_type.lower()} starting from {start_date_str} "
             f"to {end_date_str}, under the mentorship of {org}'s development team. "
             f"{name} is working on {topic}.\n\n"
-            f"The domain & agile development process exposure was given along with usage of GitHub tool.\n\n"
             f"During the {activity_type.lower()}, {name} demonstrated good coding skills with sound design thinking."
         )
     else:
-        para1 = (
-            f"This is to certify {prefix}. {name}, bearing USN No: {usn} from {college}, "
-            f"has successfully completed a {duration} {activity_type.lower()} starting from {start_date_str} "
-            f"to {end_date_str}, under the mentorship of {org}'s development team. "
+        para = (
+            f"This is to certify {prefix}. {name}, from {college}, "
+            f"has successfully completed a {duration} {activity_type.lower()} on {start_date_str} "
+            f"under the mentorship of {org}'s development team. "
             f"{name} has worked on {topic}.\n\n"
-            f"The domain & agile development process exposure was given along with usage of GitHub tool.\n\n"
             f"During the {activity_type.lower()}, {name} demonstrated good coding skills with sound design thinking."
         )
 
-    pdf.multi_cell(effective_width, 6, para1, align='J')
-    pdf.ln(6)
-    pdf.set_x(left_margin)
-    para3 = clean_text("We wish all the best for future endeavours!")
-    pdf.multi_cell(effective_width, 6, para3, align='J')
+    pdf.multi_cell(effective_width, 6, para, align='J')
 
-    # --- Move Seal and Signature Higher ---
-    content_end_y = pdf.get_y()
-    min_sign_y = page_height - bottom_margin - 60  # 20mm higher than before
-    y_sign_start = max(content_end_y + 10, min_sign_y)
-
+    # Footer and signatures
+    y_sign_start = page_height - 68
     pdf.set_font("Arial", "", 12)
     pdf.set_xy(page_width - right_margin - pdf.get_string_width(for_text), y_sign_start)
     pdf.cell(pdf.get_string_width(for_text), 7, for_text, align='L')
 
-    # Seal (left)
+    # Add seal and signature
     if seal_path and os.path.exists(seal_path):
-        try:
-            seal_width = 30.0
-            pdf.image(seal_path, x=left_margin, y=y_sign_start, w=seal_width)
-        except Exception as e:
-            st.error(f"Error loading seal image: {e}")
-
-    # Signature (right)
-    sign_height = 0.0
-    sign_y = y_sign_start + 6.0
-    sign_width = 40.0
+        pdf.image(seal_path, x=left_margin, y=y_sign_start, w=30.0)
     if signature_path and os.path.exists(signature_path):
-        try:
-            pdf.image(signature_path, x=page_width - right_margin - sign_width, y=sign_y, w=sign_width)
-            try:
-                img = Image.open(signature_path)
-                w_px, h_px = img.size
-                sign_height = (h_px / w_px) * sign_width
-            except:
-                sign_height = 15.0
-        except Exception as e:
-            st.error(f"Error loading signature image: {e}")
-
-    # Director label
-    director_y = sign_y + sign_height + 5.0
+        pdf.image(signature_path, x=page_width - right_margin - 40, y=y_sign_start + 6.0, w=40.0)
     pdf.set_font("Arial", "", 12)
-    director_text_width = pdf.get_string_width("Director")
-    director_x = page_width - right_margin - sign_width + (sign_width - director_text_width) / 2
-    pdf.text(director_x, director_y, "Director")
+    pdf.text(page_width - right_margin - 20, y_sign_start + 25.0, "Director")
 
-    # Footer
+    # Footer with organization details
     pdf.set_font("Arial", "", 9)
-    footer_y = page_height - bottom_margin - 10
-    pdf.set_y(footer_y)
-    pdf.set_x(0)
+    pdf.set_y(page_height - 20)
     pdf.cell(0, 5, org_footer1, align='C', ln=1)
     pdf.cell(0, 5, org_footer2, align='C', ln=1)
     pdf.cell(0, 5, org_footer3, align='C', ln=1)
 
-    pdf_bytes = pdf.output(dest='S').encode('latin-1')
-    return pdf_bytes
+    # Return PDF as bytes
+    return pdf.output(dest='S').encode('latin-1')
 
+
+# ---------------------------------------------------------
+# DATABASE INSERTION FOR GENERATED CERTIFICATES
+# ---------------------------------------------------------
+
+# Insert each generated certificate’s metadata into the MySQL table
 def insert_certificate_data(user_id, row, org):
     conn = st.connection("mysql", type="sql")
     table = f"certificate_data_{org}"
@@ -328,9 +329,15 @@ def insert_certificate_data(user_id, row, org):
         session.execute(
             text(f"""
                 INSERT INTO {table} (
-                    user_id, prefix, name, usn, college, email, phone, registered, start_date, end_date, program, mode, payment_status, certificate_issued_date, topic, domain, certificate_id, status
+                    user_id, prefix, name, usn, college, email,
+                    phone, registered, start_date, end_date,
+                    program, mode, payment_status, certificate_issued_date,
+                    topic, domain, certificate_id, status
                 ) VALUES (
-                    :user_id, :prefix, :name, :usn, :college, :email, :phone, :registered, :start_date, :end_date, :program, :mode, :payment_status, :certificate_issued_date, :topic, :domain, :certificate_id, 'pending_review'
+                    :user_id, :prefix, :name, :usn, :college, :email,
+                    :phone, :registered, :start_date, :end_date,
+                    :program, :mode, :payment_status, :certificate_issued_date,
+                    :topic, :domain, :certificate_id, 'pending_review'
                 )
             """),
             {
@@ -356,12 +363,21 @@ def insert_certificate_data(user_id, row, org):
         session.commit()
 
 
+# ---------------------------------------------------------
+# STREAMLIT UI COMPONENTS AND FUNCTIONALITY
+# ---------------------------------------------------------
+
+# Organization selector dropdown
 def org_dropdown(label="Organization"):
     return st.selectbox(label, list(ORG_ASSETS.keys()))
 
+
+# Domain selector dropdown
 def domain_dropdown(label="Domain"):
     return st.selectbox(label, list(DOMAIN_SHORTFORMS.keys()))
 
+
+# Generate and download ZIP of approved certificates
 def generate_certificates_for_approved(user_id, org, sig_path, seal_path, logo_path):
     conn = st.connection("mysql", type="sql")
     table = f"certificate_data_{org}"
@@ -369,42 +385,33 @@ def generate_certificates_for_approved(user_id, org, sig_path, seal_path, logo_p
         f"SELECT * FROM {table} WHERE user_id = :user_id AND status = 'Review_Completed'",
         params={"user_id": user_id}
     )
-
     if results.empty:
         st.warning("No approved certificates to generate.")
         return
 
+    # Add all certificates to a ZIP file
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zipf:
         for _, row in results.iterrows():
-            prefix = row["prefix"]
-            name = row["name"]
-            usn = row["usn"]
-            college = row["college"]
-            topic = row["topic"]
-            cert_id = row["cert_id"]
-            start_date_str = format_date(row["start_date"])
-            end_date_str = format_date(row["end_date"])
-
-            
             pdf_bytes = generate_certificate_pdf(
-                prefix=prefix,
-                name=name,
-                usn=usn,
-                college=college,
-                start_date_str=start_date_str,
-                end_date_str=end_date_str,
-                topic=topic,
-                cert_id=cert_id,
+                prefix=row["prefix"],
+                name=row["name"],
+                usn=row["usn"],
+                college=row["college"],
+                start_date_str=format_date(row["start_date"]),
+                end_date_str=format_date(row["end_date"]),
+                topic=row["topic"],
+                cert_id=row["cert_id"],
                 org=org,
                 logo_path=logo_path,
                 signature_path=sig_path,
                 seal_path=seal_path,
                 cert_type="Final"
             )
-            pdf_filename = f"{name.replace(' ', '_')}_{cert_id}.pdf"
+            pdf_filename = f"{row['name'].replace(' ', '_')}_{row['cert_id']}.pdf"
             zipf.writestr(pdf_filename, pdf_bytes)
 
+    # Offer ZIP file download
     zip_buffer.seek(0)
     st.download_button(
         label="Download Approved Certificates ZIP",
@@ -413,14 +420,23 @@ def generate_certificates_for_approved(user_id, org, sig_path, seal_path, logo_p
         mime="application/zip"
     )
 
+
+# ---------------------------------------------------------
+# MAIN STREAMLIT APP LOGIC
+# ---------------------------------------------------------
+
 def main():
     st.title("Certificate Generator")
 
+    # Initialize login state
     if 'logged_in' not in st.session_state:
         st.session_state['logged_in'] = False
 
+    # --- Login and Register Menu ---
     if not st.session_state['logged_in']:
         menu = st.sidebar.selectbox("Menu", ["Login", "Register"])
+
+        # Registration page
         if menu == "Register":
             st.subheader("Create New Account")
             username = st.text_input("Username", key="reg_user")
@@ -429,6 +445,7 @@ def main():
             if st.button("Register"):
                 register_user(username, email, password)
 
+        # Login page
         elif menu == "Login":
             st.subheader("Login to Your Account")
             username = st.text_input("Username", key="login_user")
@@ -443,9 +460,11 @@ def main():
                     st.error("Invalid username or password.")
         return
 
+    # --- Logged-in Menu Options ---
     st.sidebar.success(f"Logged in as {st.session_state['username']}")
     menu = st.sidebar.radio("Actions", ["Upload & Generate Certificates", "Download Approved Certificates", "Logout"])
 
+    # Logout
     if menu == "Logout":
         st.session_state['logged_in'] = False
         st.rerun()
@@ -453,14 +472,17 @@ def main():
 
     user_id = get_user_id(st.session_state['username'])
 
+    # -------------------------------------------------
+    # UPLOAD & GENERATE CERTIFICATES
+    # -------------------------------------------------
     if menu == "Upload & Generate Certificates":
         st.header("Batch Upload & Certificate Generation")
 
         cert_type = st.radio("Certificate Type", ["Provisional", "Final"])
-        org = org_dropdown()  # keep as it is
-        domain = domain_dropdown()  # keep as it is
+        org = org_dropdown()
+        domain = domain_dropdown()
 
-        # 3. Activity Type (dropdown)
+        # Choose activity type
         activity_options = [
             "Internship", "Bootcamp", "Certification Course", "Workshop",
             "Hackathon", "Ideathon", "Faculty Development Program",
@@ -470,15 +492,14 @@ def main():
         if activity_type == "Other":
             activity_type = st.text_input("Enter custom activity type")
 
-        # 4. Duration (dropdown)
+        # Choose duration
         duration_options = ["15 Weeks", "1 Month", "2 Months", "3 Months", "4 Months", "Other"]
         duration = st.selectbox("Duration", duration_options)
         if duration == "Other":
             duration = st.text_input("Enter custom duration")
 
-        # 5. File upload
+        # Upload student CSV data
         uploaded_file = st.file_uploader("Upload Student Data (CSV)", type="csv")
-
 
         if uploaded_file:
             df = pd.read_csv(uploaded_file)
@@ -486,9 +507,8 @@ def main():
             cleaned_df["Domain"] = domain
             st.write("Mapped Data Preview:", cleaned_df.head())
 
-            generate_clicked = st.button("Generate Certificates")
-
-            if generate_clicked:
+            # Generate certificates
+            if st.button("Generate Certificates"):
                 logo_path = ORG_ASSETS[org]["logo"]
                 sig_path = ORG_ASSETS[org]["signature"]
                 seal_path = ORG_ASSETS[org]["seal"]
@@ -497,12 +517,15 @@ def main():
                 with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zipf:
                     for _, row in cleaned_df.iterrows():
                         try:
+                            # Generate unique certificate ID
                             cert_id = generate_certificate_id(
                                 DOMAIN_SHORTFORMS[domain],
                                 row["USN"],
                                 pd.to_datetime(row["End Date"]),
                                 org
                             )
+
+                            # Generate individual PDF
                             pdf_bytes = generate_certificate_pdf(
                                 prefix=row["Prefix"],
                                 name=row["Name"],
@@ -520,20 +543,19 @@ def main():
                                 activity_type=activity_type,
                                 duration=duration
                             )
+
+                            # Save into ZIP and database
                             pdf_filename = f"{row['Name'].replace(' ', '_')}_{cert_id}.pdf"
                             zipf.writestr(pdf_filename, pdf_bytes)
                             row["Certificate ID"] = cert_id
                             insert_certificate_data(user_id, row, org)
+
                         except Exception as e:
                             st.error(f"Error generating certificate for {row['Name']}: {str(e)}")
 
+                # Final ZIP download
                 zip_buffer.seek(0)
-
-                if "Program" in cleaned_df.columns and not cleaned_df["Program"].isnull().all():
-                    program_name = str(cleaned_df["Program"].iloc[0])
-                else:
-                    program_name = "Certificates"
-
+                program_name = str(cleaned_df["Program"].iloc[0]) if "Program" in cleaned_df.columns and not cleaned_df["Program"].isnull().all() else "Certificates"
                 now_str = datetime.now().strftime("%Y%m%d_%H%M%S")
                 zip_filename = f"{org}_{program_name}_{now_str}.zip".replace(" ", "_")
 
@@ -541,6 +563,7 @@ def main():
                 st.session_state['zip_filename'] = zip_filename
                 st.success("Certificates generated successfully!")
 
+            # Download button for ZIP file
             if 'zip_buffer' in st.session_state and st.session_state['zip_buffer']:
                 st.download_button(
                     label="Download Certificates ZIP",
@@ -549,6 +572,9 @@ def main():
                     mime="application/zip"
                 )
 
+    # -------------------------------------------------
+    # DOWNLOAD APPROVED CERTIFICATES
+    # -------------------------------------------------
     elif menu == "Download Approved Certificates":
         st.header("Download Approved Certificates")
         org = org_dropdown()
@@ -557,7 +583,7 @@ def main():
         seal_path = ORG_ASSETS[org]["seal"]
         generate_certificates_for_approved(user_id, org, sig_path, seal_path, logo_path)
 
+
+# Entry point of the application
 if __name__ == "__main__":
     main()
-    
-
