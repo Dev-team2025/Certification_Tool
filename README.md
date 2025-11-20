@@ -66,8 +66,8 @@ project-root/
 ## 📦 Installation & Setup
 
 **1. Clone the repository:**
-git clone https://github.com/your-username/certificate-generator.git
-cd certificate-generator
+git clone https://github.com/Dev-team2025/Certification_Tool
+cd Certification_Tool
 
 text
 
